@@ -1,0 +1,78 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{minted}
+\usepackage{amsmath}
+\title{llmnote}
+\author{jhlyu}
+\date{July 2026}
+\newcommand{\bs}{\textrm{batch\_size}}
+\newcommand{\seq}{\textrm{seq}}
+\newcommand{\dm}{\textrm{d\_model}}
+\newcommand{\vs}{\textrm{vocab\_size}}
+\newcommand{\fea}{\textrm{feature}}
+
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+Prediction, prediction, prediction! Let us consider a general model for prediction. We have a seq \(X_{0}X_{1}\dots X_{n}\) and we want to predict the next symbol $X_{n+1}$. An easy example would be we see a all 0 seq "00\dots0". We naturally predict that the next digit is 0. Mathematically speaking, a prediction machine provides the probability of the next symbol(token) based on the previous token
+\section{Details}
+In this section, we briefly review the transformer architecture. The basic Q is to how do we predict the next token based on the current information. Let us say that the data we have is $X \in (\bs \times \seq ) $. In each entries we have an ID. The first thing we do is to embedding each ID into a higher dimension $\dm$. The matrix is denoted as $E \in (\vs \times \dm)$. The embedding is simply
+\begin{minted}[
+    linenos,
+    frame=single,
+    breaklines,
+    fontsize=\small
+]{python}
+class embedding(nn.Module):
+    def __init__(self, vocab_size, d_model, weights):
+        super().__init__()
+        self.weights = nn.Parameter(weights)
+    def forward(self, token_ids):
+        return self.weights[token_ids]
+\end{minted}
+Now we have $\fea \in (\bs,\seq,\dm)$. The next task is to generate the probability of the next one. We will introduce the attention mechanism. It requires three $Q,K,V$ components. Basically, $Q,K$ map each token $x$ to vectors $q_{x},k_{x}$ living in $d_{k}$ dimension, respectively. Then we can have a dot product table:
+\begin{align}
+    (\text{dot})_{ij} = \frac{1}{\sqrt{d_{k}}} q_{x_i}\cdot k_{x_{j}}~.
+\end{align}
+This can show the similarity between each token. Then we do a softmax along the last dimension of which results are called score:
+\begin{align}
+    (\textrm{score})_{ij} = \exp[ (\textrm{dot})_{ij}]/\sum_{k}\exp[ (\textrm{dot})_{ik}]~.
+\end{align}
+For each $(\textrm{score})_{ij}$, it has the property of
+\begin{align}
+    \sum_{j}(\textrm{score})_{ij} = 1~.
+\end{align}
+To do reasonable prediction, we need to mask out each $(\textrm{score})_{ij}$ with $i > j$. Right now we have a score table like 
+\begin{align}
+    \textrm{score} = \begin{pmatrix}
+        1 & 0 & 0 \\
+        0.4 & 0.6 & 0 \\
+        0.5 & 0.4 & 0.1
+    \end{pmatrix}
+\end{align}
+Next step is to build attention, with the above score example, the attention is 
+\begin{align}
+    \textrm{attn} = \textrm{score} @ V = \begin{pmatrix}
+        v_1 \\ 0.4v_1 + 0.6 v_2 \\ 0.5v_1 + 0.4 v_2 + 0.1 v_3
+    \end{pmatrix}~.
+\end{align}
+This is for single head attention $\textrm{attn}\in (\bs, \seq, d_{v})$. In piratical, we can have multiple heads.
+\begin{align}
+    (\textrm{head}_1, \dots,\textrm{head}_{h}) \in (\bs, \seq, d_{v}\times h= \dm)~. 
+\end{align}
+Then we mix this multi-head attention with a matrix $O\in(\dm, \dm)$. And add this back to $X$
+\begin{align}
+    X' = X + \textrm{Multi-Head}(X)~.
+\end{align} 
+And then add FNN to this X':
+\begin{align}
+    X'' = X' + \textrm{FNN}(X')
+\end{align}
+Here we list code.
+\end{document}
