@@ -7,12 +7,13 @@
 \usepackage{amsmath}
 \title{llmnote}
 \author{jhlyu}
-\date{July 2026}
+\date{\today}
 \newcommand{\bs}{\textrm{batch\_size}}
 \newcommand{\seq}{\textrm{seq}}
 \newcommand{\dm}{\textrm{d\_model}}
 \newcommand{\vs}{\textrm{vocab\_size}}
 \newcommand{\fea}{\textrm{feature}}
+\newcommand{\raw}{\textrm{raw}}
 
 
 \begin{document}
@@ -20,9 +21,19 @@
 \maketitle
 
 \section{Introduction}
-Prediction, prediction, prediction! Let us consider a general model for prediction. We have a seq \(X_{0}X_{1}\dots X_{n}\) and we want to predict the next symbol $X_{n+1}$. An easy example would be we see a all 0 seq "00\dots0". We naturally predict that the next digit is 0. Mathematically speaking, a prediction machine provides the probability of the next symbol(token) based on the previous token
-\section{Details}
-In this section, we briefly review the transformer architecture. The basic Q is to how do we predict the next token based on the current information. Let us say that the data we have is $X \in (\bs \times \seq ) $. In each entries we have an ID. The first thing we do is to embedding each ID into a higher dimension $\dm$. The matrix is denoted as $E \in (\vs \times \dm)$. The embedding is simply
+Prediction, prediction, prediction! Let us consider a general model for prediction. We have a seq \(x_{0}x_{1}\dots x_{n-1}\) and we want to predict the next symbol $x_{n}$. An easy example would be we see a all 0 seq \(x_{0}x_{1}\dots x_{n-1}=00\dots0\). We naturally predict that the next digit \(x_{n}\) is 0 with large confidence. Mathematically speaking, a prediction machine provides the probability of the next symbol(token) based on all previous token:
+\begin{align}
+    \text{a prediction machine} \sim \Pr(x_{n}|x_{0}\dots x_{n-1})~.
+\end{align}
+The main question is how to construct this conditional probability function. Or we want to build a raw logits function of \(x_{n}\) = \(z(x_{0}x_{1}\dots x_{n-1})\). A first straightforward step is to embed these tokens into high dimension space. But what is the next? It will be super inefficient to train a series of function \(\{z_i( x_0 \dots x_{i-1})\}_{i=1}\) to predict the \(i\)-th token \(X_{i}\). A different perspective is to use correlation function to predict the next token. More precisely, we will not use the regular correlation but a pairwise similarity function which can be viewed as correlation-like. I think it would be better to start from a specific example, a sentence:
+
+\begin{align}
+    \boxed{\text{The cat sat on the mat because } \textcolor{red}{\text{it}} \text{ was tired.}}~.
+\end{align}
+The red "it" refers to "the cat". But how should we design a mechanism to let the machine realize it?
+
+\section{Tech Details}
+In this section, we review the technical part of the transformer architecture. We mainly focus on the self-attention part. The basic Q is to how do we predict the next token based on the current information. Let us say that the data we have is $X^{\raw} \in (\bs \times \seq ) $. In each entries we have an ID. The first thing we do is to embedding each ID into a higher dimension $\dm$. The matrix is denoted as $E \in (\vs \times \dm)$. The embedding is simply
 \begin{minted}[
     linenos,
     frame=single,
@@ -36,33 +47,92 @@ class embedding(nn.Module):
     def forward(self, token_ids):
         return self.weights[token_ids]
 \end{minted}
-Now we have $\fea \in (\bs,\seq,\dm)$. The next task is to generate the probability of the next one. We will introduce the attention mechanism. It requires three $Q,K,V$ components. Basically, $Q,K$ map each token $x$ to vectors $q_{x},k_{x}$ living in $d_{k}$ dimension, respectively. Then we can have a dot product table:
+Now we have input feature $X \in ( \bs \times\seq\times\dm)$. To simplify the notation without losing any generality, we set $\bs = 1$, i.e., 
 \begin{align}
-    (\text{dot})_{ij} = \frac{1}{\sqrt{d_{k}}} q_{x_i}\cdot k_{x_{j}}~.
-\end{align}
-This can show the similarity between each token. Then we do a softmax along the last dimension of which results are called score:
-\begin{align}
-    (\textrm{score})_{ij} = \exp[ (\textrm{dot})_{ij}]/\sum_{k}\exp[ (\textrm{dot})_{ik}]~.
-\end{align}
-For each $(\textrm{score})_{ij}$, it has the property of
-\begin{align}
-    \sum_{j}(\textrm{score})_{ij} = 1~.
-\end{align}
-To do reasonable prediction, we need to mask out each $(\textrm{score})_{ij}$ with $i > j$. Right now we have a score table like 
-\begin{align}
-    \textrm{score} = \begin{pmatrix}
-        1 & 0 & 0 \\
-        0.4 & 0.6 & 0 \\
-        0.5 & 0.4 & 0.1
-    \end{pmatrix}
-\end{align}
-Next step is to build attention, with the above score example, the attention is 
-\begin{align}
-    \textrm{attn} = \textrm{score} @ V = \begin{pmatrix}
-        v_1 \\ 0.4v_1 + 0.6 v_2 \\ 0.5v_1 + 0.4 v_2 + 0.1 v_3
+    X = \begin{pmatrix}
+        e_1 \\
+        e_2 \\
+        \vdots\\
+        e_n-1
     \end{pmatrix}~.
 \end{align}
-This is for single head attention $\textrm{attn}\in (\bs, \seq, d_{v})$. In piratical, we can have multiple heads.
+The attention mechanism requires three components, $W_Q,W_K,W_V$. Here, the big picture is that $W_Q,W_K,W_V$ matrices assign three vectors $q=W_{Q}^{\top} x,  k=W_{K}^{\top}x , v=W_{V}^{\top} x$ to each embedding vector $x$. We list the shape of these three matrices:
+\begin{align*}
+    &W_Q \in (\dm, \text{d}_k) \\
+    &W_K \in (\dm, \text{d}_k) \\
+    &W_V \in (\dm, \text{d}_v) ~.
+\end{align*}
+$W_Q, W_K$ map each token $x$ to vectors $q_{x},k_{x}$ living in $d_{k}$ dimension, respectively. We use these two sets of vector to compute how tokens are connected. We build a score product table:
+\begin{align}
+    (\text{score})_{ij} = \frac{1}{\sqrt{d_{k}}} q_{x_i}\cdot k_{x_{j}}~.
+\end{align}
+This can show the similarity among tokens. Vaguely speaking, the large entry \((\text{score})_{ij}\) in this table means that the token \(i\) and the token \(j\) are strong connected. Then we do a softmax along the last dimension of which results are called attention:
+\begin{align}
+    (\textrm{attn})_{ij} = \exp[ (\textrm{score})_{ij}]/\sum_{k}\exp[ (\textrm{score})_{ik}]~.
+\end{align}
+For each $(\textrm{attn})_{ij}$, it has the property of
+\begin{align}
+    \sum_{j}(\textrm{attn})_{ij} = 1~.
+\end{align}
+To do real prediction, we need to mask out each $(\textrm{score})_{ij}$ with $i > j$. The reason is that for each query \(i\) we can only look up the key backward. So we need set all $(\textrm{score})_{ij}$ with $i > j$ to be $-\infty$. For example, a proper attn matrix looks like 
+\[
+A=
+\begin{array}{c|cccccccccc}
+ & \text{The} & \text{cat} & \text{sat} & \text{on} & \text{the}
+ & \text{mat} & \text{because} & \text{it} & \text{was} & \text{tired}\\
+\hline
+
+\text{The}
+&1.000&0&0&0&0&0&0&0&0&0\\
+
+\text{cat}
+&0.366&0.634&0&0&0&0&0&0&0&0\\
+
+\text{sat}
+&0.131&0.413&0.456&0&0&0&0&0&0&0\\
+
+\text{on}
+&0.120&0.163&0.296&0.421&0&0&0&0&0&0\\
+
+\text{the}
+&0.227&0.113&0.107&0.196&0.357&0&0&0&0&0\\
+
+\text{mat}
+&0.079&0.101&0.130&0.184&0.203&0.303&0&0&0&0\\
+
+\text{because}
+&0.081&0.115&0.155&0.099&0.089&0.133&0.328&0&0&0\\
+
+\text{it}
+&0.059&0.290&0.097&0.053&0.056&0.124&0.107&0.215&0&0\\
+
+\text{was}
+&0.056&0.097&0.088&0.062&0.059&0.072&0.097&0.217&0.252&0\\
+
+\text{tired}
+&0.039&0.113&0.065&0.044&0.041&0.062&0.072&0.177&0.160&0.227
+\end{array}~.
+\]
+This can be viewed as correlation information contained in this sentence. We do not want to sent this whole attn matrix into our machine learning model. Instead, we introduce a mechanism to propagate the information forward such that we only predict the next token based on the modified last token \(\Tilde{x}_{n-1}\).
+\begin{align}
+    &z(x_0x_1\dots x_{n-1}) \leftarrow \text{not the function we want learn} \\
+    &z(\Tilde{x}_{n-1})  \leftarrow \text{the function we want learn} ~.
+\end{align}
+To do this, we decorate the original feature $X$. We introduce another vector \(x_v \in \text{d}_v\) for each token. For the whole feature, the $V$ matrix is $V=XW_V \in (\seq \times \text{d}_v)$. The attn is simply \( \text{attn} = A@V\)
+\begin{align}
+\mathrm{Attn}
+&=
+A V \\
+&=
+\begin{pmatrix}
+1.000\,v_1 \\
+0.366\,v_1 + 0.634\,v_2 \\
+0.131\,v_1 + 0.413\,v_2 + 0.456\,v_3 \\
+0.120\,v_1 + 0.163\,v_2 + 0.296\,v_3 + 0.421\,v_4 \\
+\vdots
+\end{pmatrix}.
+\end{align}
+This is for single head attention $\textrm{attn}\in (\seq, d_{v})$. In piratical, we can have multiple heads.
 \begin{align}
     (\textrm{head}_1, \dots,\textrm{head}_{h}) \in (\bs, \seq, d_{v}\times h= \dm)~. 
 \end{align}
